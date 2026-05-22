@@ -34,6 +34,9 @@ String deviceApiKey;
 String currentDeviceMode = "unknown";
 unsigned long lastHeartbeatAt = 0;
 const unsigned long HEARTBEAT_INTERVAL_MS = 60000;
+unsigned long lastRegisterBlink = 0;
+bool registerLedState = false;
+const unsigned long REGISTER_BLINK_INTERVAL = 500;
 
 // Konek Wi-Fi
 void connectToWiFi() {
@@ -198,6 +201,9 @@ void sendHeartbeat() {
     String action, message, deviceMode;
     if (parseStandardResponse(responseBody, action, message, deviceMode)) {
       if (deviceMode.length() > 0) {
+        if (currentDeviceMode != deviceMode) {
+          Serial.println("[HEARTBEAT] Device mode changed: " + deviceMode);
+        }
         currentDeviceMode = deviceMode;
       }
       Serial.println("[HEARTBEAT] OK: " + message);
@@ -241,7 +247,87 @@ bool sendCardTap(const String& unixId, String& actionOut, String& messageOut, St
     Serial.println("[HTTP] Status Code: " + String(httpResponseCode));
     Serial.println("[HTTP] Balasan Web: " + responseBody);
 
-    success = parseStandardResponse(responseBody, actionOut, messageOut, deviceModeOut);
+    // Parse full response to extract member/pending when available
+    DynamicJsonDocument doc(2048);
+    DeserializationError derr = deserializeJson(doc, responseBody);
+    if (derr) {
+      Serial.print("[HTTP] Gagal parse JSON: ");
+      Serial.println(derr.c_str());
+      http.end();
+      return false;
+    }
+    JsonObject data = doc["data"].as<JsonObject>();
+    actionOut = data["action"] | "";
+    messageOut = data["message"] | "";
+    deviceModeOut = data["device_mode"] | "";
+
+    // If registered, try to verify pending/member match and send confirmation
+    if (actionOut == "registered") {
+      String memberId = "";
+      String memberName = "";
+      String memberPhone = "";
+      String pendingName = "";
+      String pendingPhone = "";
+
+      if (data.containsKey("member")) {
+        JsonObject m = data["member"].as<JsonObject>();
+        memberId = m["id"] | "";
+        memberName = m["name"] | "";
+        memberPhone = m["phone"] | "";
+      }
+      if (data.containsKey("pending")) {
+        JsonObject p = data["pending"].as<JsonObject>();
+        pendingName = p["name"] | "";
+        pendingPhone = p["phone"] | "";
+      }
+
+      bool verified = true;
+      if (pendingName.length() > 0) {
+        String pcopy = pendingName;
+        String mcopy = memberName;
+        pcopy.toLowerCase();
+        mcopy.toLowerCase();
+        verified = (pcopy == mcopy);
+      }
+      if (verified && pendingPhone.length() > 0) {
+        // compare digits only
+        String pnorm = pendingPhone;
+        String mnorm = memberPhone;
+        for (int i = pnorm.length() - 1; i >= 0; i--) if (!isDigit(pnorm[i])) pnorm.remove(i,1);
+        for (int i = mnorm.length() - 1; i >= 0; i--) if (!isDigit(mnorm[i])) mnorm.remove(i,1);
+        verified = (pnorm == mnorm);
+      }
+
+      if (verified && memberId.length() > 0) {
+        // Send confirmation to server
+        String confirmUrl = buildApiUrl("/card/confirm");
+        HTTPClient http2;
+        configureHttpClient(http2);
+        http2.begin(secureClient, confirmUrl);
+        http2.addHeader("Content-Type", "application/json");
+        http2.addHeader("X-API-Key", deviceApiKey);
+        http2.addHeader("X-Node-ID", deviceNodeId);
+        http2.addHeader("X-Hardware-ID", getHardwareId());
+
+        DynamicJsonDocument payload2(256);
+        payload2["unix_id"] = unixId;
+        payload2["member_id"] = memberId;
+        String body2;
+        serializeJson(payload2, body2);
+        Serial.println("[CONFIRM] POST " + confirmUrl + " payload: " + body2);
+        int rc2 = http2.POST(body2);
+        if (rc2 > 0) {
+          String resp2 = http2.getString();
+          Serial.println("[CONFIRM] Status " + String(rc2) + " resp: " + resp2);
+        } else {
+          Serial.println("[CONFIRM] Failed to POST confirmation: " + http2.errorToString(rc2));
+        }
+        http2.end();
+      }
+
+    }
+
+    success = true;
   } else {
     Serial.print("[HTTP] Gagal tersambung ke web server! Error: ");
     Serial.println(http.errorToString(httpResponseCode).c_str());
@@ -308,6 +394,19 @@ void loop() {
     lastHeartbeatAt = millis();
   }
 
+  // Show register mode indicator (non-blocking blink)
+  if (currentDeviceMode == "register") {
+    unsigned long now = millis();
+    if (now - lastRegisterBlink >= REGISTER_BLINK_INTERVAL) {
+      lastRegisterBlink = now;
+      registerLedState = !registerLedState;
+      digitalWrite(PIN_LED_HIJAU, registerLedState ? HIGH : LOW);
+    }
+  } else {
+    // ensure indicator off when not in register mode
+    digitalWrite(PIN_LED_HIJAU, LOW);
+  }
+
   // Standby nunggu kartu ditempel
   if (!rfid.PICC_IsNewCardPresent()) return;
   if (!rfid.PICC_ReadCardSerial()) return;
@@ -360,12 +459,25 @@ void loop() {
       digitalWrite(PIN_LED_HIJAU, LOW);
     } else if (action == "registered") {
       Serial.println("[STATUS] KARTU TERDAFTAR / MEMBER DIAKTIFKAN.");
-      digitalWrite(PIN_LED_HIJAU, HIGH);
-      digitalWrite(PIN_BUZZER, HIGH);
-      delay(300);
-      digitalWrite(PIN_BUZZER, LOW);
-      delay(300);
-      digitalWrite(PIN_LED_HIJAU, LOW);
+      if (currentDeviceMode == "register") {
+        // Registration-specific feedback: short double-beep and brighter flash
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(PIN_LED_HIJAU, HIGH);
+          digitalWrite(PIN_BUZZER, HIGH);
+          delay(200);
+          digitalWrite(PIN_BUZZER, LOW);
+          digitalWrite(PIN_LED_HIJAU, LOW);
+          delay(150);
+        }
+        Serial.println("[REGISTER] Device was in register mode; tap created member.");
+      } else {
+        digitalWrite(PIN_LED_HIJAU, HIGH);
+        digitalWrite(PIN_BUZZER, HIGH);
+        delay(300);
+        digitalWrite(PIN_BUZZER, LOW);
+        delay(300);
+        digitalWrite(PIN_LED_HIJAU, LOW);
+      }
     } else {
       Serial.println("[STATUS] KARTU BELUM TERDAFTAR / AKSES DITOLAK!");
       digitalWrite(PIN_LED_MERAH, HIGH);
