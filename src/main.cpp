@@ -115,6 +115,9 @@ bool parseStandardResponse(const String& body, String& action, String& message, 
   action = data["action"] | "";
   message = data["message"] | doc["message"] | "";
   deviceMode = data["device_mode"] | "";
+  if (deviceMode.length() == 0) {
+    deviceMode = data["mode"] | "";
+  }
   return true;
 }
 
