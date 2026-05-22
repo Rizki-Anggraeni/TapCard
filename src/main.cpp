@@ -12,6 +12,7 @@ const char* ssid     = "";
 const char* password = "";  
 
 const char* API_BASE_URL = "https://iot.airashi.biz.id/api/v1";
+const char* DEVICE_NODE_ID = "";
 const char* DEVICE_API_KEY = "YOUR_DEVICE_API_KEY";
 const char* DEFAULT_DEVICE_NAME = "TapCard ESP32";
 
@@ -174,6 +175,7 @@ void sendHeartbeat() {
   http.begin(secureClient, url);
   http.addHeader("X-API-Key", deviceApiKey);
   http.addHeader("X-Node-ID", deviceNodeId);
+  http.addHeader("X-Hardware-ID", getHardwareId());
 
   int code = http.GET();
   if (code > 0) {
@@ -207,6 +209,7 @@ bool sendCardTap(const String& unixId, String& actionOut, String& messageOut, St
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", deviceApiKey);
   http.addHeader("X-Node-ID", deviceNodeId);
+  http.addHeader("X-Hardware-ID", getHardwareId());
 
   DynamicJsonDocument payload(128);
   payload["unix_id"] = unixId;
@@ -238,6 +241,9 @@ void setup() {
   rfid.PCD_Init();
   secureClient.setInsecure();
   loadDeviceCredentials();
+  if (deviceNodeId.length() == 0 && String(DEVICE_NODE_ID).length() > 0) {
+    saveDeviceCredentials(DEVICE_NODE_ID, DEVICE_API_KEY);
+  }
   
   pinMode(PIN_BUZZER, OUTPUT);
   pinMode(PIN_LED_HIJAU, OUTPUT);
