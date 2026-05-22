@@ -58,7 +58,20 @@ void connectToWiFi() {
 }
 
 String buildApiUrl(const char* path) {
-  return String(API_BASE_URL) + String(path);
+  String base = String(API_BASE_URL);
+  if (base.endsWith("/")) {
+    base.remove(base.length() - 1);
+  }
+  String p = String(path);
+  if (!p.startsWith("/")) {
+    p = "/" + p;
+  }
+  return base + p;
+}
+
+void configureHttpClient(HTTPClient& http) {
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(5);
 }
 
 String getHardwareId() {
@@ -109,6 +122,7 @@ bool provisionDevice() {
 
   HTTPClient http;
   secureClient.setInsecure();
+  configureHttpClient(http);
 
   String url = buildApiUrl("/devices/provision");
   DynamicJsonDocument payload(256);
@@ -169,6 +183,7 @@ void sendHeartbeat() {
 
   HTTPClient http;
   secureClient.setInsecure();
+  configureHttpClient(http);
 
   String url = buildApiUrl("/devices/me/status");
   Serial.println("[HEARTBEAT] Cek status device...");
@@ -203,6 +218,7 @@ bool sendCardTap(const String& unixId, String& actionOut, String& messageOut, St
 
   HTTPClient http;
   secureClient.setInsecure();
+  configureHttpClient(http);
 
   String url = buildApiUrl("/card/tap");
   http.begin(secureClient, url);
